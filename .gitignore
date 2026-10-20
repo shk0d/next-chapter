@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+test-results/
+playwright-report/
+.DS_Store
+*.pem
+v2/
+release/
+
+# Local development context and handoff documents
+/AGENTS.md
+/IMPLEMENTATION.md
+/CHROMEWEBSTORE.md
+/plan.md
+/auth-setup.md
+/dashboard-ui-handoff.md
