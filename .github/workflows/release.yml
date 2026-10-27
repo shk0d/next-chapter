@@ -1,0 +1,108 @@
+name: Package latest build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize publication so overlapping pushes cannot replace each other's assets.
+concurrency:
+  group: latest-build
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+
+  release:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
+      VITE_MICROSOFT_CLIENT_ID: ${{ vars.VITE_MICROSOFT_CLIENT_ID }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      # Browser checks use an unconfigured build in a separate job. Package
+      # the same source here with the owner's optional public OAuth IDs.
+      - run: npm run package
+      - name: Verify archive and checksum
+        working-directory: release
+        run: |
+          unzip -t next-chapter-v*.zip
+          sha256sum --check SHA256SUMS.txt
+      - name: Refresh latest-build prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Skip an old queued run or manual rerun after main has advanced.
+          current_sha=$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq '.object.sha')
+          if [[ "$current_sha" != "$GITHUB_SHA" ]]; then
+            echo "Skipping publication: main has advanced beyond $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          notes="$RUNNER_TEMP/latest-build.md"
+          {
+            echo '# Latest main build'
+            echo
+            echo "Commit: [$GITHUB_SHA](https://github.com/$GH_REPO/commit/$GITHUB_SHA)"
+            echo "Checks: [unit tests, build, built-extension browser tests and ZIP integrity](https://github.com/$GH_REPO/actions/runs/$GITHUB_RUN_ID) passed."
+            echo
+            if [[ -n "$VITE_GOOGLE_CLIENT_ID" ]]; then
+              echo 'Gmail is configured; OAuth test-user access is still required.'
+            else
+              echo 'Gmail is not configured in this build. Manual/CSV tracking works.'
+            fi
+            if [[ -n "$VITE_MICROSOFT_CLIENT_ID" ]]; then
+              echo 'Outlook is configured; real-account consent is still required.'
+            else
+              echo 'Outlook is not configured in this build. Manual/CSV tracking works.'
+            fi
+            echo
+            cat RELEASE.md
+          } > "$notes"
+
+          if gh release view latest-build > /dev/null 2>&1; then
+            gh release upload latest-build release/next-chapter-v*.zip release/SHA256SUMS.txt --clobber
+            # Editing a release's target alone does not move its existing tag.
+            gh api --method PATCH "repos/$GH_REPO/git/refs/tags/latest-build" \
+              -f sha="$GITHUB_SHA" -F force=true > /dev/null
+            gh release edit latest-build --title 'Latest build (main)' \
+              --notes-file "$notes" --prerelease --latest=false
+          else
+            gh release create latest-build release/next-chapter-v*.zip release/SHA256SUMS.txt \
+              --target "$GITHUB_SHA" --title 'Latest build (main)' \
+              --notes-file "$notes" --prerelease --latest=false
+          fi
+          echo "Updated [Latest build](https://github.com/$GH_REPO/releases/tag/latest-build) from $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
