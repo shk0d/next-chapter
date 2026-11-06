@@ -101,6 +101,57 @@ describe("parsing and provider normalization", () => {
       )?.status,
     ).toBe("Offer");
   });
+  it("extracts common ATS formats and keeps stage cues tied to the message", () => {
+    expect(
+      parseEmail({
+        ...mail(
+          "x",
+          "Hello,\n\nThank you for applying to Northstar Labs for Senior Product Designer. We received your application.",
+        ),
+        subject: "Application received",
+      }),
+    ).toMatchObject({
+      company: "Northstar Labs",
+      role: "Senior Product Designer",
+      status: "Applied",
+      confidence: "high",
+    });
+    expect(
+      parseEmail({
+        ...mail(
+          "x",
+          "Please choose a time for your interview for the Backend Engineer role at Orbit Systems.",
+        ),
+        subject: "Interview invitation",
+      }),
+    ).toMatchObject({
+      company: "Orbit Systems",
+      role: "Backend Engineer",
+      status: "Interview",
+    });
+    expect(
+      parseEmail({
+        ...mail(
+          "x",
+          "Thank you for applying for the Data Analyst position at Acme. We will contact you if selected; interviews may follow.",
+        ),
+        subject: "Application received",
+      })?.status,
+    ).toBe("Applied");
+    expect(
+      parseEmail({
+        ...mail(
+          "x",
+          "Unfortunately, we will not be moving forward with your application for the Platform Engineer role at Acme.",
+        ),
+        subject: "Update on your application",
+      }),
+    ).toMatchObject({
+      company: "Acme",
+      role: "Platform Engineer",
+      status: "Rejected",
+    });
+  });
   it("ignores job digests and routes ambiguous or forwarded messages to review", () => {
     expect(
       parseEmail({
@@ -168,6 +219,19 @@ describe("durability, sync, review, and corrections", () => {
     expect(metrics(s.applications).interviews).toBe(1);
   });
   it("does not let older mail regress status", async () => {
+    expect(
+      parseEmail(
+        mail(
+          "interview",
+          "We invite you to an interview for the position Software Engineer at Acme.",
+        ),
+      )?.status,
+    ).toBe("Interview");
+    expect(parseEmail(mail())).toMatchObject({
+      company: "Acme",
+      role: "Software Engineer",
+      status: "Applied",
+    });
     await commitMailBatch(
       account.id,
       "g",
