@@ -17,6 +17,7 @@ import {
 import { listFolders } from "../integrations/microsoft";
 import { db, updateAccount } from "../db/database";
 import { requestSync } from "../background/sync";
+import { JobPageSettings } from "./JobPageSettings";
 import { Modal, formatDate } from "./components";
 export function Connections({
   accounts,
@@ -82,7 +83,7 @@ export function Connections({
     }
   }
   return (
-    <Modal title="Email connections" onClose={onClose} wide>
+    <Modal title="Connections" onClose={onClose} wide>
       <p className="muted">
         Read application updates from Gmail and Outlook. Parsing happens on this
         device. We never send mail, modify your inbox, or upload it to an AI
@@ -239,6 +240,7 @@ export function Connections({
           </section>
         );
       })}
+      <JobPageSettings />
       <details className="setup">
         <summary>First-time OAuth setup</summary>
         <p>

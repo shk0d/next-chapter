@@ -9,17 +9,12 @@ import {
   RefreshCw,
   Inbox,
   ArrowUpRight,
-  BriefcaseBusiness,
-  CalendarClock,
-  ArrowUp,
   Settings2,
+  List,
+  Columns3,
+  ShieldCheck,
 } from "lucide-react";
-import {
-  type Application,
-  statuses,
-  metrics,
-  blankApplication,
-} from "../domain/model";
+import { type Application, statuses, blankApplication } from "../domain/model";
 import { snapshot, subscribe } from "../db/database";
 import { requestSync } from "../background/sync";
 import { isExtension } from "../integrations/auth";
@@ -28,7 +23,10 @@ import { ApplicationEditor } from "./ApplicationEditor";
 import { Portability } from "./Portability";
 import { Connections } from "./Connections";
 import { Review } from "./Review";
-import { Skeletons } from "./Skeletons";
+import { Pipeline } from "./Pipeline";
+import gmailIcon from "../assets/gmail.svg";
+import outlookIcon from "../assets/outlook.svg";
+import { isDesignDemo, trackerDatabaseName } from "../design-preview";
 type Data = Awaited<ReturnType<typeof snapshot>>;
 const empty: Data = {
   applications: [],
@@ -36,14 +34,9 @@ const empty: Data = {
   candidates: [],
   evidence: [],
 };
-const pages = ["Today", "Tasks", "Calendar", "Applications"];
-function route() {
-  const p = location.hash.slice(1).split("/")[0];
-  return pages.find((x) => x.toLowerCase() === p) ?? "Applications";
-}
 export function App() {
   const previousHash = useRef(location.hash);
-  const [page, setPage] = useState(route);
+  const [view, setView] = useState<"list" | "pipeline">("pipeline");
   const [data, setData] = useState<Data>(empty);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -52,7 +45,19 @@ export function App() {
   const [detail, setDetail] = useState<Application>();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All");
-  const [sort, setSort] = useState("action");
+  const [webQuery, setWebQuery] = useState("");
+  const [seenUpdates, setSeenUpdates] = useState<string[]>(() => {
+    try {
+      const saved = JSON.parse(
+        localStorage.getItem(`${trackerDatabaseName}-seen-updates`) || "[]",
+      );
+      return Array.isArray(saved)
+        ? saved.filter((key): key is string => typeof key === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  });
   const [index, setIndex] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const refresh = useCallback(() => {
@@ -86,7 +91,6 @@ export function App() {
         return;
       }
       previousHash.current = location.hash;
-      setPage(route());
       setDetail(undefined);
     };
     window.addEventListener("hashchange", hash);
@@ -103,41 +107,95 @@ export function App() {
   }, [toast]);
   useEffect(() => {
     setIndex(0);
-  }, [query, filter, sort]);
+  }, [query, filter]);
   const filtered = useMemo(
     () =>
       data.applications
         .filter(
           (a) =>
-            (filter === "All" || a.status === filter) &&
+            (view === "pipeline" || filter === "All" || a.status === filter) &&
             `${a.company} ${a.role} ${a.location}`
               .toLowerCase()
               .includes(query.toLowerCase()),
         )
-        .sort((a, b) =>
-          sort === "company"
-            ? a.company.localeCompare(b.company)
-            : sort === "updated"
-              ? b.updatedAt.localeCompare(a.updatedAt)
-              : (a.actionDone || !a.actionDate
-                  ? "9999"
-                  : a.actionDate
-                ).localeCompare(
-                  b.actionDone || !b.actionDate ? "9999" : b.actionDate,
-                ) || b.updatedAt.localeCompare(a.updatedAt),
+        .sort(
+          (a, b) =>
+            (a.actionDone || !a.actionDate
+              ? "9999"
+              : a.actionDate
+            ).localeCompare(
+              b.actionDone || !b.actionDate ? "9999" : b.actionDate,
+            ) || b.updatedAt.localeCompare(a.updatedAt),
         ),
-    [data.applications, filter, query, sort],
+    [data.applications, filter, query, view],
   );
   const pageIndex = Math.min(
     index,
     Math.max(0, Math.ceil(filtered.length / 10) - 1),
   );
   const visible = filtered.slice(pageIndex * 10, pageIndex * 10 + 10);
-  const m = metrics(data.applications);
+  const updatesFor = (status: string) => {
+    if (!["OA", "Interview", "Offer"].includes(status)) return [];
+    const upcoming = new Date();
+    upcoming.setDate(upcoming.getDate() + 7);
+    const until = `${upcoming.getFullYear()}-${String(upcoming.getMonth() + 1).padStart(2, "0")}-${String(upcoming.getDate()).padStart(2, "0")}`;
+    const actions = data.applications
+      .filter(
+        (a) =>
+          a.status === status &&
+          ((!a.actionDone &&
+            a.action &&
+            a.actionDate &&
+            a.actionDate <= until) ||
+            a.history.some((h) => h.origin === "email")),
+      )
+      .map((a) => `application:${a.id}:${a.revision}`);
+    const candidates = data.candidates
+      .filter((c) => c.state === "pending" && c.proposal.status === status)
+      .map((c) => `candidate:${c.id}`);
+    return [...actions, ...candidates].filter(
+      (key) => !seenUpdates.includes(key),
+    );
+  };
+  function selectStatus(status: string, filterList = true) {
+    if (filterList) setFilter(status);
+    const updates = updatesFor(status);
+    if (!updates.length) return;
+    const next = [...new Set([...seenUpdates, ...updates])];
+    setSeenUpdates(next);
+    try {
+      localStorage.setItem(
+        `${trackerDatabaseName}-seen-updates`,
+        JSON.stringify(next),
+      );
+    } catch {
+      /* Session feedback still works without localStorage. */
+    }
+  }
+  async function searchWeb(e: React.FormEvent) {
+    e.preventDefault();
+    if (!webQuery.trim()) return;
+    if (!isExtension()) {
+      setToast(
+        "Default browser search is available in the extension. Use the address bar in this preview.",
+      );
+      return;
+    }
+    try {
+      await chrome.search.query({
+        text: webQuery.trim(),
+        disposition: "CURRENT_TAB",
+      });
+    } catch {
+      setToast(
+        "Could not open browser search. Reload the updated extension and try again.",
+      );
+    }
+  }
   const review = data.candidates.filter((c) => c.state === "pending").length;
   const connected = data.accounts.filter((a) => a.connected);
   const syncErrors = connected.filter((a) => a.error);
-  function go(p: string) {
+  function go() {
     if (
       !window.dispatchEvent(
         new Event("tracker-before-navigate", { cancelable: true }),
@@ -145,12 +203,10 @@ export function App() {
     )
       return;
     setDetail(undefined);
-    setPage(p);
-    location.hash = p.toLowerCase();
+    location.hash = "applications";
   }
   function open(a: Application) {
     setDetail(a);
-    setPage("Applications");
   }
   async function sync() {
     setSyncing(true);
@@ -178,7 +234,7 @@ export function App() {
           className="brand"
           onClick={(e) => {
             e.preventDefault();
-            go("Applications");
+            go();
           }}
         >
           <span className="brand-mark">
@@ -186,32 +242,99 @@ export function App() {
           </span>
           Next Chapter
         </a>
-        <nav aria-label="Main navigation">
-          {pages.map((p) => (
-            <button
-              key={p}
-              aria-current={page === p ? "page" : undefined}
-              className={page === p ? "active" : ""}
-              onClick={() => go(p)}
-            >
-              {p}
-            </button>
-          ))}
-        </nav>
-        <button
-          className="header-settings"
-          onClick={() => setModal("connections")}
+        <form
+          className="header-search"
+          role="search"
+          onSubmit={(e) => void searchWeb(e)}
         >
-          <Settings2 size={17} />
-          <span>Connections</span>
-          {connected.length > 0 && <span className="connection-dot" />}
-        </button>
+          <Search size={16} />
+          <input
+            aria-label="Search the web"
+            placeholder="Search the web"
+            value={webQuery}
+            onChange={(e) => setWebQuery(e.target.value)}
+          />
+          <button type="submit" aria-label="Submit web search">
+            <ArrowUpRight size={15} />
+          </button>
+        </form>
+        <div className="mailbox-shortcuts">
+          {(["gmail", "microsoft"] as const).map((provider) => {
+            const account = connected.find((a) => a.provider === provider);
+            const label = provider === "gmail" ? "Gmail" : "Outlook";
+            const href =
+              provider === "gmail"
+                ? `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(account?.label || "")}#inbox`
+                : "https://outlook.office.com/mail/";
+            return account ? (
+              <a
+                key={provider}
+                className={`mailbox-shortcut ${provider} connected-mailbox`}
+                href={href}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`Open ${label} inbox`}
+                title={`Open ${label} inbox · ${account.label}`}
+              >
+                <img
+                  src={provider === "gmail" ? gmailIcon : outlookIcon}
+                  width="22"
+                  height="22"
+                  alt=""
+                />
+              </a>
+            ) : (
+              <button
+                key={provider}
+                className="mailbox-shortcut"
+                disabled
+                aria-label={`${label} not connected`}
+                title={`Connect ${label} in Connections to open your inbox`}
+              >
+                <img
+                  src={provider === "gmail" ? gmailIcon : outlookIcon}
+                  width="22"
+                  height="22"
+                  alt=""
+                />
+              </button>
+            );
+          })}
+        </div>
+        <div className="header-actions">
+          <button className="text-button" onClick={() => setModal("files")}>
+            <Download size={15} /> Import / export
+          </button>
+          <button
+            className="header-settings"
+            onClick={() => setModal("connections")}
+          >
+            <Settings2 size={17} />
+            <span>Connections</span>
+            {connected.length > 0 && <span className="connection-dot" />}
+          </button>
+        </div>
       </header>
       <main>
         {!isExtension() && (
           <div className="preview-banner">
-            <span>LOCAL PREVIEW</span>Tracker data is saved in this browser.
-            Load the extension to connect email.
+            <span className="preview-label">DESIGN PREVIEW</span>
+            <span>
+              {isDesignDemo
+                ? "Fictional applications · separate demo workspace"
+                : "Your local tracker · email requires the extension"}
+            </span>
+            <div className="preview-switch" aria-label="Preview data">
+              <a
+                href="?demo=1"
+                aria-current={isDesignDemo ? "page" : undefined}
+              >
+                Demo data
+              </a>
+              <a href="?" aria-current={!isDesignDemo ? "page" : undefined}>
+                My tracker
+              </a>
+            </div>
           </div>
         )}
         {error && (
@@ -228,298 +351,265 @@ export function App() {
             evidence={data.evidence}
             onClose={() => setDetail(undefined)}
           />
-        ) : page === "Applications" ? (
+        ) : (
           <>
-            <div className="section-top page-heading">
-              <div>
-                <h1>Applications</h1>
-                <p>Track every opportunity, from interest to offer.</p>
-              </div>
-              <button
-                className="primary"
-                onClick={() => open(blankApplication())}
-              >
-                <Plus size={18} />
-                Add application
-              </button>
-            </div>
-            <div className="metrics">
-              {[
-                {
-                  label: "Submitted",
-                  value: m.submitted,
-                  note: "Across all submitted applications",
-                  icon: <BriefcaseBusiness size={17} />,
-                },
-                {
-                  label: "Reached interview",
-                  value: m.interviews,
-                  note: "Based on your stage history",
-                  icon: <ArrowUp size={17} />,
-                },
-                {
-                  label: "Action due in 7 days",
-                  value: m.due,
-                  note: "Your upcoming next steps",
-                  icon: <CalendarClock size={17} />,
-                },
-                {
-                  label: "Offers",
-                  value: m.offers,
-                  note: "Currently at the offer stage",
-                  icon: <ArrowUpRight size={17} />,
-                },
-              ].map((s) => (
-                <div className="metric" key={s.label}>
-                  <div>
-                    <span>{s.label}</span>
-                    {s.icon}
-                  </div>
-                  <strong>{s.value}</strong>
-                  <small>{s.note}</small>
-                </div>
-              ))}
-            </div>
-            <div className="sync-strip">
-              <div className="sync-label">
-                <span
-                  className={`status-dot ${syncErrors.length ? "warning" : connected.length ? "live" : ""}`}
-                />
-                <span>
-                  {connected.length
-                    ? `${connected.length} mailbox${connected.length > 1 ? "es" : ""} connected`
-                    : "Email is not connected"}
-                </span>
-                <span className="muted">
-                  {syncErrors.length
-                    ? `${syncErrors.length} connection${syncErrors.length > 1 ? "s" : ""} need attention`
-                    : connected.length
-                      ? "Checks every 15 min while Chrome is open"
-                      : "Connect Gmail and Outlook to track updates automatically."}
-                </span>
-              </div>
-              <div className="actions">
-                {review > 0 && (
-                  <button
-                    className="review-button"
-                    onClick={() => setModal("review")}
-                  >
-                    <Inbox size={15} />
-                    Review <span>{review}</span>
-                  </button>
-                )}
-                {connected.length > 0 && (
-                  <button
-                    className="text-button"
-                    disabled={syncing}
-                    onClick={() => void sync()}
-                  >
-                    <RefreshCw size={14} className={syncing ? "spin" : ""} />
-                    {syncing ? "Checking…" : "Sync now"}
-                  </button>
-                )}
-                <button
-                  className="text-button"
-                  onClick={() => setModal("connections")}
-                >
-                  <Mail size={15} />
-                  {connected.length ? "Manage email" : "Connect email"}
-                </button>
-              </div>
-            </div>
-            <div className="filters">
-              <div className="search-input">
-                <Search size={20} />
-                <input
-                  aria-label="Search applications"
-                  placeholder="Search company or role"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
-                {query && (
-                  <button
-                    aria-label="Clear search"
-                    onClick={() => setQuery("")}
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-              <select
-                aria-label="Filter status"
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-              >
-                <option value="All">All statuses</option>
-                {statuses.map((s) => (
-                  <option key={s}>{s}</option>
-                ))}
-              </select>
-              <select
-                aria-label="Sort applications"
-                value={sort}
-                onChange={(e) => setSort(e.target.value)}
-              >
-                <option value="action">Next action date</option>
-                <option value="updated">Last updated</option>
-                <option value="company">Company A–Z</option>
-              </select>
-              <button
-                className="text-button export-link"
-                onClick={() => setModal("files")}
-              >
-                Import / export
-                <Download size={16} />
-              </button>
-            </div>
-            <div className="status-tabs" aria-label="Application statuses">
-              {["All", ...statuses].map((s) => (
-                <button
-                  key={s}
-                  aria-label={`${s} ${s === "All" ? data.applications.length : data.applications.filter((a) => a.status === s).length}`}
-                  aria-pressed={filter === s}
-                  className={filter === s ? "selected" : ""}
-                  onClick={() => setFilter(s)}
-                >
-                  {s}
-                  <span>
-                    {s === "All"
-                      ? data.applications.length
-                      : data.applications.filter((a) => a.status === s).length}
-                  </span>
-                </button>
-              ))}
-            </div>
-            {loading ? (
-              <div className="empty" role="status">
-                Loading your tracker…
-              </div>
-            ) : !data.applications.length ? (
-              <Empty
-                title="Your next chapter starts here"
-                action={
-                  <div className="actions">
+            <section
+              className="tracker-surface"
+              aria-label="Application workspace"
+            >
+              <div className="workspace-heading">
+                <h1 className="workspace-title">Applications</h1>
+                <div className="workspace-tools">
+                  {review > 0 && (
                     <button
-                      className="primary"
-                      onClick={() => open(blankApplication())}
+                      className="review-button"
+                      onClick={() => setModal("review")}
                     >
-                      <Plus size={16} />
-                      Add your first application
+                      <Inbox size={15} /> Review {review}
                     </button>
-                    <button onClick={() => setModal("connections")}>
-                      <Mail size={16} />
-                      Connect email
+                  )}
+                  {connected.length > 0 && (
+                    <button
+                      className="text-button"
+                      disabled={syncing}
+                      onClick={() => void sync()}
+                    >
+                      <RefreshCw size={14} className={syncing ? "spin" : ""} />
+                      Sync now
                     </button>
-                  </div>
-                }
-              >
-                Keep every opportunity, conversation, and next step in one
-                place. Add an application, import a CSV, or connect your
-                mailbox.
-              </Empty>
-            ) : !filtered.length ? (
-              <Empty
-                title="No applications found"
-                action={
+                  )}
+                  {syncErrors.length > 0 && (
+                    <button
+                      className="text-button"
+                      onClick={() => setModal("connections")}
+                    >
+                      Connection needs attention
+                    </button>
+                  )}
+                </div>
+                <div
+                  className="view-switch"
+                  role="group"
+                  aria-label="Application view"
+                >
                   <button
-                    onClick={() => {
-                      setQuery("");
-                      setFilter("All");
-                    }}
+                    aria-pressed={view === "list"}
+                    onClick={() => setView("list")}
                   >
-                    Clear filters
+                    <List size={15} /> List
                   </button>
-                }
-              >
-                Try a different company, role, or status.
-              </Empty>
-            ) : (
-              <>
-                <div className="table-scroll">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Company / role</th>
-                        <th>Status</th>
-                        <th>Next action / last update</th>
-                        <th>
-                          <span className="sr-only">Details</span>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {visible.map((a) => (
-                        <tr key={a.id}>
-                          <td>
-                            <button
-                              className="company-button"
-                              onClick={() => open(a)}
-                            >
-                              <span className="table-logo">
-                                {a.company.slice(0, 1).toUpperCase()}
-                              </span>
-                              <span>
-                                <strong>{a.company}</strong>
-                                <small>{a.role}</small>
-                              </span>
-                            </button>
-                          </td>
-                          <td>
-                            <Chip status={a.status} />
-                          </td>
-                          <td>
-                            <span className={a.actionDone ? "completed" : ""}>
-                              {a.action || `Last update · ${a.status}`}
-                            </span>
-                            <small>
-                              {a.actionDate
-                                ? `${a.actionDone ? "Completed · " : "Due "}${formatDate(a.actionDate)}`
-                                : formatDate(a.updatedAt)}
-                            </small>
-                          </td>
-                          <td>
-                            <button
-                              className="icon-button"
-                              aria-label={`Open ${a.company} application`}
-                              onClick={() => open(a)}
-                            >
-                              <ChevronRight size={20} />
-                            </button>
-                          </td>
+                  <button
+                    aria-pressed={view === "pipeline"}
+                    onClick={() => setView("pipeline")}
+                  >
+                    <Columns3 size={15} /> Pipeline
+                  </button>
+                </div>
+                <button
+                  className="primary"
+                  onClick={() => open(blankApplication())}
+                >
+                  <Plus size={16} /> Add application
+                </button>
+              </div>
+              <div className="filters">
+                <div className="search-input">
+                  <Search size={20} />
+                  <input
+                    aria-label="Search applications"
+                    placeholder="Search company or role"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                  {query && (
+                    <button
+                      aria-label="Clear search"
+                      onClick={() => setQuery("")}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              </div>
+              {view === "list" && (
+                <div className="status-tabs" aria-label="Application statuses">
+                  {["All", ...statuses].map((s) => (
+                    <button
+                      key={s}
+                      aria-label={`${s} ${s === "All" ? data.applications.length : data.applications.filter((a) => a.status === s).length}`}
+                      aria-pressed={filter === s}
+                      className={`${filter === s ? "selected" : ""} ${updatesFor(s).length ? "has-update" : ""}`}
+                      onClick={() => selectStatus(s)}
+                      title={
+                        updatesFor(s).length
+                          ? `${updatesFor(s).length} new updates or upcoming actions`
+                          : undefined
+                      }
+                    >
+                      {updatesFor(s).length > 0 && (
+                        <span
+                          className="unread-badge"
+                          aria-label={`${updatesFor(s).length} updates`}
+                        >
+                          {updatesFor(s).length}
+                        </span>
+                      )}
+                      {s}
+                      <span className="status-count">
+                        {s === "All"
+                          ? data.applications.length
+                          : data.applications.filter((a) => a.status === s)
+                              .length}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {loading ? (
+                <div className="empty" role="status">
+                  Loading your tracker…
+                </div>
+              ) : !data.applications.length ? (
+                <Empty
+                  title="Your next chapter starts here"
+                  action={
+                    <div className="actions">
+                      <button
+                        className="primary"
+                        onClick={() => open(blankApplication())}
+                      >
+                        <Plus size={16} />
+                        Add your first application
+                      </button>
+                      <button onClick={() => setModal("connections")}>
+                        <Mail size={16} />
+                        Connect email
+                      </button>
+                    </div>
+                  }
+                >
+                  Keep every opportunity, conversation, and next step in one
+                  place. Add an application, import a CSV, or connect your
+                  mailbox.
+                </Empty>
+              ) : !filtered.length ? (
+                <Empty
+                  title="No applications found"
+                  action={
+                    <button
+                      onClick={() => {
+                        setQuery("");
+                        setFilter("All");
+                      }}
+                    >
+                      Clear filters
+                    </button>
+                  }
+                >
+                  Try a different company, role, or status.
+                </Empty>
+              ) : view === "pipeline" ? (
+                <Pipeline
+                  applications={filtered}
+                  updatesFor={updatesFor}
+                  onAcknowledge={(status) => selectStatus(status, false)}
+                  onOpen={open}
+                  onAdd={(status) => open({ ...blankApplication(), status })}
+                />
+              ) : (
+                <>
+                  <div className="table-scroll">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Company / role</th>
+                          <th>Status</th>
+                          <th>Applied</th>
+                          <th>Next action / last update</th>
+                          <th>
+                            <span className="sr-only">Details</span>
+                          </th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="pagination">
-                  <span>
-                    {pageIndex * 10 + 1}–
-                    {Math.min(pageIndex * 10 + 10, filtered.length)} of{" "}
-                    {filtered.length} applications
-                  </span>
-                  <div className="actions">
-                    <button
-                      disabled={pageIndex === 0}
-                      onClick={() => setIndex(pageIndex - 1)}
-                    >
-                      <ChevronLeft size={15} />
-                      Previous
-                    </button>
-                    <button
-                      disabled={(pageIndex + 1) * 10 >= filtered.length}
-                      onClick={() => setIndex(pageIndex + 1)}
-                    >
-                      Next
-                      <ChevronRight size={15} />
-                    </button>
+                      </thead>
+                      <tbody>
+                        {visible.map((a) => (
+                          <tr key={a.id}>
+                            <td>
+                              <button
+                                className="company-button"
+                                onClick={() => open(a)}
+                              >
+                                <span className="table-logo">
+                                  {a.company.slice(0, 1).toUpperCase()}
+                                </span>
+                                <span>
+                                  <strong>{a.company}</strong>
+                                  <small>{a.role}</small>
+                                </span>
+                              </button>
+                            </td>
+                            <td>
+                              <Chip status={a.status} />
+                            </td>
+                            <td className="applied-date">
+                              {a.appliedDate
+                                ? formatDate(a.appliedDate)
+                                : "Not yet applied"}
+                            </td>
+                            <td>
+                              <span className={a.actionDone ? "completed" : ""}>
+                                {a.action || `Last update · ${a.status}`}
+                              </span>
+                              <small>
+                                {a.actionDate
+                                  ? `${a.actionDone ? "Completed · " : "Due "}${formatDate(a.actionDate)}`
+                                  : formatDate(a.updatedAt)}
+                              </small>
+                            </td>
+                            <td>
+                              <button
+                                className="icon-button"
+                                aria-label={`Open ${a.company} application`}
+                                onClick={() => open(a)}
+                              >
+                                <ChevronRight size={20} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                </div>
-              </>
-            )}
+                  <div className="pagination">
+                    <span>
+                      {pageIndex * 10 + 1}–
+                      {Math.min(pageIndex * 10 + 10, filtered.length)} of{" "}
+                      {filtered.length} applications
+                    </span>
+                    <div className="actions">
+                      <button
+                        disabled={pageIndex === 0}
+                        onClick={() => setIndex(pageIndex - 1)}
+                      >
+                        <ChevronLeft size={15} />
+                        Previous
+                      </button>
+                      <button
+                        disabled={(pageIndex + 1) * 10 >= filtered.length}
+                        onClick={() => setIndex(pageIndex + 1)}
+                      >
+                        Next
+                        <ChevronRight size={15} />
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </section>
             <footer>
               <span>
-                <span className="local-dot" />
-                Saved on this device
+                <ShieldCheck size={14} />
+                Private by default. Saved on this device.
               </span>
               <button className="text-button" onClick={() => setModal("files")}>
                 Back up your tracker
@@ -527,13 +617,6 @@ export function App() {
               </button>
             </footer>
           </>
-        ) : (
-          <Skeletons
-            page={page}
-            applications={data.applications}
-            onApplications={() => go("Applications")}
-            onOpen={open}
-          />
         )}
       </main>
       {modal === "connections" && (

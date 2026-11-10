@@ -79,6 +79,7 @@ test("new-tab override loads packaged assets, empty state and real persistence",
   expect(errors).toEqual([]);
 });
 test("generic detail, status history, search and filters", async () => {
+  await page.getByRole("button", { name: "List", exact: true }).click();
   await page.getByRole("button", { name: /Acme Software Engineer/ }).click();
   await expect(page.getByLabel("Application notes")).toHaveValue(
     "Discussed with recruiter.",
@@ -153,44 +154,73 @@ test("CSV export/import and backup restore work from the built extension", async
   await page.getByRole("button", { name: "Import / export" }).click();
   await page.getByRole("button", { name: "Close", exact: true }).click();
 });
-test("connection setup, screen skeletons, responsive UI and worker messaging", async () => {
-  await page
-    .getByRole("button", { name: "Connect email", exact: true })
-    .click();
+test("connection setup, tracker views, responsive UI and worker messaging", async () => {
+  await page.getByRole("button", { name: "Connections", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Gmail", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Outlook / Microsoft 365" }),
   ).toBeVisible();
-  await page
-    .getByRole("button", { name: "Connect Gmail", exact: true })
-    .click();
-  await expect(page.getByRole("alert")).toContainText("VITE_GOOGLE_CLIENT_ID");
+  const gmailConnect = page.getByRole("button", {
+    name: "Connect Gmail",
+    exact: true,
+  });
+  await expect(gmailConnect).toBeEnabled();
+  const manifest = JSON.parse(await fs.readFile("dist/manifest.json", "utf8"));
+  // Release builds can include public OAuth IDs. Only exercise missing-ID
+  // guidance when unconfigured; never open real consent in fixture tests.
+  if (!manifest.oauth2?.client_id) {
+    await gmailConnect.click();
+    await expect(page.getByRole("alert")).toContainText(
+      "VITE_GOOGLE_CLIENT_ID",
+    );
+  }
   await page.getByRole("button", { name: "Done", exact: true }).click();
-  await page.getByRole("button", { name: "Today", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "Schedule", exact: true }),
-  ).toBeVisible();
+  for (const name of ["Today", "Tasks", "Calendar"]) {
+    await expect(page.getByRole("button", { name, exact: true })).toHaveCount(
+      0,
+    );
+  }
   await page.screenshot({
-    path: "test-results/today-skeleton-1440.png",
+    path: "test-results/tracker-list-1440.png",
     fullPage: true,
   });
-  await page.getByRole("button", { name: "Tasks", exact: true }).click();
+  await page.getByRole("button", { name: "Pipeline", exact: true }).click();
   await expect(
-    page
-      .getByText("Task editing is not available yet.", { exact: false })
-      .first(),
+    page.getByRole("button", { name: "Pipeline", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByRole("button", { name: "List", exact: true }),
+  ).toHaveAttribute("aria-pressed", "false");
+  await expect(
+    page.getByRole("region", { name: "Application pipeline" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Calendar", exact: true }).click();
-  await page.getByRole("button", { name: "Month", exact: true }).click();
-  await expect(page.locator(".calendar-preview.month")).toBeVisible();
-  await page.getByRole("button", { name: "Applications", exact: true }).click();
+  await page.screenshot({
+    path: "test-results/tracker-pipeline-1440.png",
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: /Beta Designer/ }).click();
+  await expect(
+    page.getByRole("heading", { name: "Beta", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "All applications", exact: true })
+    .click();
+  await page.getByRole("button", { name: "List", exact: true }).click();
+  // Old bookmarks resolve to the tracker after the scope pivot.
+  await page.evaluate(() => {
+    location.hash = "calendar";
+  });
+  await expect(
+    page.getByRole("heading", { name: /^Applications/ }),
+  ).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({
     path: "test-results/applications-mobile.png",
     fullPage: true,
   });
+
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -335,9 +365,7 @@ test("both mail adapters drive the built worker, and repeated sync does not dupl
     chrome.runtime.sendMessage({ type: "SYNC", force: true }),
   );
   await page.reload();
-  await expect(
-    page.getByRole("button", { name: "All 5", exact: true }),
-  ).toBeVisible();
+  await expect(page.locator(".pipeline-card")).toHaveCount(5);
   await expect(page.getByRole("button", { name: /^Review/ })).toHaveCount(0);
   await page.screenshot({
     path: "test-results/email-tracker-1440.png",
@@ -373,9 +401,7 @@ test("worker restart and full browser restart retain tracker data", async () => 
     await page.evaluate(() => chrome.runtime.sendMessage({ type: "SYNC" })),
   ).toEqual({ ok: true });
   await page.reload();
-  await expect(
-    page.getByRole("button", { name: "All 5", exact: true }),
-  ).toBeVisible();
+  await expect(page.locator(".pipeline-card")).toHaveCount(5);
   await context.close();
   const extension = path.resolve("dist");
   context = await chromium.launchPersistentContext(profile, {
@@ -390,9 +416,7 @@ test("worker restart and full browser restart retain tracker data", async () => 
   });
   page = await context.newPage();
   await page.goto(base);
-  await expect(
-    page.getByRole("button", { name: "All 5", exact: true }),
-  ).toBeVisible();
+  await expect(page.locator(".pipeline-card")).toHaveCount(5);
   await page.getByRole("button", { name: /Acme Software Engineer/ }).click();
   await expect(page.getByLabel("Application notes")).toHaveValue(
     "Updated in first tab",

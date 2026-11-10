@@ -1,4 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
+import { trackerDatabaseName } from "../design-preview";
 import {
   type Application,
   type Candidate,
@@ -28,7 +29,7 @@ interface Schema extends DBSchema {
 }
 let connection: Promise<IDBPDatabase<Schema>> | undefined;
 export const db = () =>
-  (connection ??= openDB<Schema>("next-chapter", 1, {
+  (connection ??= openDB<Schema>(trackerDatabaseName, 1, {
     upgrade(d) {
       for (const name of [
         "applications",
@@ -54,7 +55,7 @@ export const db = () =>
   }));
 const channel =
   typeof BroadcastChannel !== "undefined"
-    ? new BroadcastChannel("next-chapter-changes")
+    ? new BroadcastChannel(`${trackerDatabaseName}-changes`)
     : undefined;
 export function notify() {
   channel?.postMessage("change");

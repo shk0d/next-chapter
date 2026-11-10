@@ -1,6 +1,10 @@
 # Next Chapter
 
-Your job applications, their status, notes and next steps, right in a new Chrome tab. Everything stays in your browser. This first version focuses on the application tracker; Today, Tasks and Calendar are still previews.
+Your job applications, their status, notes and next steps, right in a new Chrome tab. Everything stays in your browser. The current direction is a light-theme application tracker with list and pipeline views. See [PRODUCT-DIRECTION.md](PRODUCT-DIRECTION.md) for the approved scope; Today, Tasks, Calendar, and Canvas are outside the current roadmap. Release ZIPs may predate this redesign.
+
+## Live design preview
+
+Run `npm run dev` and open `http://localhost:5173/?demo=1` to explore the light-theme mockups with synthetic applications. Switch between List and Pipeline, open a record, or add/edit an application. Demo data has its own local database; choose **My tracker** to use the ordinary localhost tracker. Hot reload shows code changes immediately. Email connection requires the built extension.
 
 ## Try v0.1.0 — no npm needed
 
@@ -56,6 +60,14 @@ pmijoeidljnohfccaeegpbenjhkfamhk
 ```
 
 `npm run dev` provides a UI-only browser preview. The preview has its own local database and cannot connect email. It does not share data with the installed extension.
+
+## Save jobs while browsing
+
+After building, reload the extension at `chrome://extensions`, then open **Connections → Job-page button**. Enable the common job sites or enter a specific HTTPS careers-site URL and approve Chrome's site-access request. Reload job pages you already had open.
+
+On a detected posting, click **+ Add to Interested**, check/correct company, role, and location, then choose **Save to Interested**. The new record appears in the tracker's Interested column with the job link. If it is already tracked, the existing stage, notes, and history are kept. No application is submitted. Disable sites individually in Connections.
+
+Initial detection supports structured JobPosting metadata and common Greenhouse, Lever, Ashby, Workday, Workable, and SmartRecruiters detail layouts. Site layouts vary; missing company/title information needs correction. Custom sites need structured posting data. LinkedIn/Indeed-specific support is not included. This feature requires the installed extension; localhost only shows its settings guidance.
 
 ## Email setup (both providers)
 
@@ -126,6 +138,18 @@ Uninstalling the extension or clearing its storage removes the local database. E
 
 ## Development and verification
 
+### Automatic GitHub builds
+
+[Package latest build](.github/workflows/release.yml) runs on each push to `main`, or manually from **Actions → Package latest build → Run workflow** with `main` selected. The checks job installs dependencies, runs unit tests, builds without OAuth IDs, and runs the built-extension browser tests with synthetic mail. After those pass, the release job builds the same source with the optional public OAuth IDs, packages it, and verifies its ZIP/checksum. A failed check prevents publication.
+
+Successful runs refresh the ZIP and `SHA256SUMS.txt` on the [Latest build prerelease](https://github.com/shk0d/next-chapter/releases/tag/latest-build). The rolling `latest-build` tag follows the packaged commit; versioned releases such as `v0.1.0` remain separate. Overlapping runs are serialized; older queued runs are skipped if `main` has advanced. One push containing several commits builds the tip of that push. Local commits start a build after they are pushed to GitHub. No generated ZIP is committed back to the repository.
+
+To configure email in automated builds, open **Settings → Secrets and variables → Actions → Variables** and add `VITE_GOOGLE_CLIENT_ID` and/or `VITE_MICROSOFT_CLIENT_ID` with the same public client IDs used locally. GitHub runners cannot read your `.env.local`. Without a provider's variable, its connection is unavailable in that build; manual/CSV tracking still works and the release notes state which providers are configured. Client secrets and tokens must never be added. The checked-in public extension key preserves the extension ID.
+
+The workflow activates once pushed to GitHub. It uses GitHub's built-in `GITHUB_TOKEN` with `contents: write`; no personal access token is needed. Repository Actions policies must allow the workflow and its official GitHub actions. The first successful run creates the rolling prerelease.
+
+### Local packaging and checks
+
 `npm run package` builds v1 and creates `release/next-chapter-v0.1.0.zip` plus `release/SHA256SUMS.txt` using the system `zip` command. The archive contains the built extension and installation instructions; it excludes source, local environment files and user data. Build-time public OAuth client IDs are part of the extension when configured. Upload the ZIP and checksum as GitHub release assets; generated archives and the separate v2 workspace are excluded from Git.
 
 ```sh
@@ -137,4 +161,4 @@ npm run test:e2e
 
 Tests use synthetic mail and a disposable Chromium profile, without touching your personal browser profile. Run the build before browser tests, and do not rebuild while they are running.
 
-For this v0.1.0 package, all 23 unit tests and the production build passed, and archive integrity/checksums were verified. A fresh browser-suite run could not complete because the test Chromium crashed during startup; this package has not received a new browser-test pass.
+For the original published v0.1.0 package, all 23 unit tests and the production build passed, and archive integrity/checksums were verified. Its browser-suite run could not complete because the test Chromium crashed during startup. The automation changes were subsequently verified with all 23 unit tests, the build, all seven built-extension browser tests using a fresh Chromium installation, and ZIP/checksum checks. Each automated release links to its own workflow results.

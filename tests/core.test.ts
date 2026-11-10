@@ -535,3 +535,146 @@ describe("API paging and failures", () => {
     ).rejects.toThrow("permission denied");
   });
 });
+
+describe("job-page capture", () => {
+  it("extracts structured JobPosting metadata without reading descriptions", async () => {
+    const { structuredJob } = await import("../src/job-pages/model");
+    expect(
+      structuredJob(
+        [
+          {
+            "@graph": [
+              {
+                "@type": "JobPosting",
+                title: "Product Designer",
+                hiringOrganization: { name: "Example Labs" },
+                jobLocation: {
+                  address: { addressLocality: "Seattle", addressRegion: "WA" },
+                },
+                description: "Never stored",
+              },
+            ],
+          },
+        ],
+        "https://jobs.example.test/design",
+      ),
+    ).toEqual({
+      company: "Example Labs",
+      role: "Product Designer",
+      location: "Seattle, WA",
+    });
+    expect(
+      structuredJob(
+        [
+          {
+            "@type": "JobPosting",
+            title: "Engineer",
+            jobLocationType: "TELECOMMUTE",
+          },
+        ],
+        "https://jobs.example.test/engineer",
+      ),
+    ).toEqual({ company: "", role: "Engineer", location: "Remote" });
+  });
+  it("does not guess a job from a multi-posting results page", async () => {
+    const { structuredJob } = await import("../src/job-pages/model");
+    const jobs = [
+      { "@type": "JobPosting", title: "Designer", url: "/designer" },
+      { "@type": "JobPosting", title: "Engineer", url: "/engineer" },
+    ];
+    expect(
+      structuredJob(jobs, "https://jobs.example.test/search"),
+    ).toBeUndefined();
+    expect(
+      structuredJob(jobs, "https://jobs.example.test/engineer")?.role,
+    ).toBe("Engineer");
+  });
+  it("retains job identifiers while removing personal/session URL data", async () => {
+    const { jobPageUrl, sitePattern } = await import("../src/job-pages/model");
+    expect(
+      jobPageUrl(
+        "https://jobs.example.test/apply?token=private&email=a%40b.test&gh_jid=123&utm_source=x#secret",
+      ),
+    ).toBe("https://jobs.example.test/apply?gh_jid=123");
+    expect(() =>
+      jobPageUrl("https://user:password@jobs.example.test/job"),
+    ).toThrow();
+    expect(() => jobPageUrl("javascript:alert(1)")).toThrow();
+    expect(sitePattern("https://jobs.example.test/a?token=private")).toBe(
+      "https://jobs.example.test/*",
+    );
+    expect(() => sitePattern("http://jobs.example.test")).toThrow();
+  });
+  it("saves Interested with manual history and no applied date", async () => {
+    const { saveJobPage } = await import("../src/job-pages/save");
+    const result = await saveJobPage(
+      {
+        company: " Example Labs ",
+        role: "Designer",
+        location: "Remote",
+        notes: "Do not copy unknown fields",
+      },
+      "https://jobs.example.test/designer",
+    );
+    const record = (await snapshot()).applications.find(
+      (a) => a.id === result.id,
+    )!;
+    expect(record).toMatchObject({
+      company: "Example Labs",
+      role: "Designer",
+      status: "Interested",
+      jobUrl: "https://jobs.example.test/designer",
+      appliedDate: "",
+      notes: "",
+      revision: 1,
+    });
+    expect(record.history).toHaveLength(1);
+    expect(record.history[0]).toMatchObject({
+      status: "Interested",
+      origin: "manual",
+    });
+  });
+  it("deduplicates concurrent clicks and retries transactionally", async () => {
+    const { saveJobPage } = await import("../src/job-pages/save");
+    const results = await Promise.all([
+      saveJobPage(
+        { company: "Example", role: "Designer" },
+        "https://jobs.example.test/123",
+      ),
+      saveJobPage(
+        { company: "Example", role: "Designer" },
+        "https://jobs.example.test/123?utm_source=retry",
+      ),
+    ]);
+    expect(results[0].id).toBe(results[1].id);
+    expect(results.filter((r) => r.existing)).toHaveLength(1);
+    expect((await snapshot()).applications).toHaveLength(1);
+  });
+  it("never demotes existing applications or overwrites manual notes", async () => {
+    const { saveJobPage } = await import("../src/job-pages/save");
+    const a = {
+      ...blankApplication(),
+      company: "Example",
+      role: "Designer",
+      status: "Interview" as const,
+      notes: "Keep this",
+      jobUrl: "https://jobs.example.test/123",
+    };
+    await saveApplication(a);
+    const before = (await snapshot()).applications[0];
+    expect(
+      await saveJobPage({ company: "Changed", role: "New" }, a.jobUrl),
+    ).toMatchObject({ id: a.id, existing: true, status: "Interview" });
+    expect((await snapshot()).applications[0]).toEqual(before);
+  });
+  it("rejects incomplete capture without changing storage", async () => {
+    const { saveJobPage } = await import("../src/job-pages/save");
+    await expect(
+      saveJobPage(
+        { company: "", role: "Designer" },
+        "https://jobs.example.test/123",
+      ),
+    ).rejects.toThrow("company and role");
+    expect((await snapshot()).applications).toHaveLength(0);
+  });
+});

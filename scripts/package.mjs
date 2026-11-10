@@ -17,7 +17,13 @@ import { join, resolve } from "node:path";
 const manifest = JSON.parse(await readFile("dist/manifest.json", "utf8"));
 if (manifest.manifest_version !== 3 || manifest.version !== "0.1.0")
   throw new Error("Expected the built v1 extension (0.1.0).");
-const allowed = ["assets", "index.html", "manifest.json", "worker.js"];
+const allowed = [
+  "assets",
+  "index.html",
+  "manifest.json",
+  "worker.js",
+  "job-page.js",
+];
 for (const entry of await readdir("dist")) {
   if (!allowed.includes(entry))
     throw new Error(

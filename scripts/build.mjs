@@ -19,6 +19,18 @@ await build({
     },
   },
 });
+await build({
+  configFile: false,
+  build: {
+    emptyOutDir: false,
+    lib: {
+      entry: "src/job-pages/content.ts",
+      formats: ["iife"],
+      name: "NextChapterJobPage",
+      fileName: () => "job-page.js",
+    },
+  },
+});
 let key;
 try {
   key = JSON.parse(await readFile("scripts/extension-key.json", "utf8")).key;
@@ -41,8 +53,9 @@ const manifest = {
     "A local-first application tracker with Gmail and Outlook email imports.",
   minimum_chrome_version: "120",
   key,
-  permissions: ["storage", "identity", "alarms"],
+  permissions: ["storage", "identity", "alarms", "search", "scripting"],
   optional_host_permissions: [
+    "https://*/*", // Requested only for individually chosen job sites.
     "https://gmail.googleapis.com/*",
     "https://graph.microsoft.com/*",
     "https://login.microsoftonline.com/*",

@@ -181,7 +181,7 @@ export function ApplicationEditor({
               Action completed
             </label>
             <p className="muted tiny">
-              Calendar and task views will use this action in a later release.
+              Keep the next step with this application. Upcoming dates appear in your tracker.
             </p>
           </div>
           <div className="panel">
